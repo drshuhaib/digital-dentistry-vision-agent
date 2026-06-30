@@ -1,2 +1,4 @@
-openai
+streamlit
+requests
 python-dotenv
+Pillow
