@@ -3,7 +3,7 @@ import os
 import base64
 import requests
 from dotenv import load_dotenv
-from PIL import Image
+from PIL import Image, ImageDraw
 import io
 from fpdf import FPDF
 from streamlit_image_coordinates import streamlit_image_coordinates
@@ -12,7 +12,6 @@ from streamlit_image_coordinates import streamlit_image_coordinates
 load_dotenv()
 API_KEY = os.environ.get("NVIDIA_API_KEY")
 
-# PDF Generation Function
 def create_pdf(report_text, image_type):
     pdf = FPDF()
     pdf.add_page()
@@ -26,12 +25,10 @@ def create_pdf(report_text, image_type):
     pdf.multi_cell(0, 6, safe_text)
     return bytes(pdf.output())
 
-# Set up the web page styling
 st.set_page_config(page_title="Vision Agent", page_icon="🦷", layout="centered")
 st.title("🦷 Digital Dentistry Vision Agent")
 st.write("Upload an intraoral scan, cephalometric image, or clinical photograph for automated analysis.")
 
-# Dynamic Diagnostic Profiles
 image_type = st.selectbox(
     "Select the type of clinical image:",
     ["Intraoral Photo / Clear Aligner Tracking", "Lateral Cephalogram", "Panoramic Radiograph (OPG)"]
@@ -44,36 +41,63 @@ prompts = {
 }
 selected_prompt = prompts[image_type]
 
-# Create the drag-and-drop upload box
 uploaded_file = st.file_uploader("Select a clinical image...", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    # Process the image
-    img = Image.open(uploaded_file)
-    if img.mode in ("RGBA", "P"):
-        img = img.convert("RGB")
+    original_img = Image.open(uploaded_file)
+    if original_img.mode in ("RGBA", "P"):
+        original_img = original_img.convert("RGB")
+        
+    # --- STANDARDIZE THE IMAGE SIZE ---
+    max_width = 800
+    if original_img.width > max_width:
+        ratio = max_width / original_img.width
+        new_size = (max_width, int(original_img.height * ratio))
+        original_img = original_img.resize(new_size, Image.Resampling.LANCZOS)
+    # ----------------------------------
+        
+    img_for_drawing = original_img.copy()
     
     st.divider()
     st.write("🎯 **CEPHALOMETRIC ENGINE TEST:**")
-    st.write("Hover over the image and click anywhere to test the coordinate tracker.")
+    st.write("Click anywhere to place a point. A green marker will appear.")
     
-    # --- THE INTERACTIVE IMAGE COMPONENT ---
-    clicked_points = streamlit_image_coordinates(img, key="ceph_clicker")
+    if 'ceph_points' not in st.session_state:
+        st.session_state.ceph_points = []
+
+    draw = ImageDraw.Draw(img_for_drawing)
     
-    # Show the coordinates when clicked
-    if clicked_points is not None:
-        st.success(f"📍 Point captured! X: {clicked_points['x']} | Y: {clicked_points['y']}")
-    # ---------------------------------------
+    for p in st.session_state.ceph_points:
+        x, y = p
+        r = 8 
+        draw.ellipse((x-r, y-r, x+r, y+r), fill="lime", outline="black", width=2)
+    
+    st.info(f"📍 Points Placed: {len(st.session_state.ceph_points)}")
+    
+    # --- THE FIX: STATIC KEY ---
+    # We must use a static string here so the web browser doesn't delete the listener
+    clicked = streamlit_image_coordinates(img_for_drawing, key="ceph_clicker_static")
+    
+    if clicked is not None:
+        new_point = (clicked['x'], clicked['y'])
+        if new_point not in st.session_state.ceph_points:
+            st.session_state.ceph_points.append(new_point)
+            st.rerun()
+            
+    if st.session_state.ceph_points:
+        if st.button("Clear All Points"):
+            st.session_state.ceph_points = []
+            st.rerun()
     
     st.divider()
     
-    # The original AI Report Button
     if st.button("Generate Clinical AI Report", type="primary"):
         with st.spinner(f"Analyzing {image_type.lower()}..."):
             try:
-                img.thumbnail((1024, 1024))
+                clean_img = original_img.copy()
+                clean_img.thumbnail((1024, 1024))
                 buffered = io.BytesIO()
-                img.save(buffered, format="JPEG", quality=85)
+                clean_img.save(buffered, format="JPEG", quality=85)
                 image_b64 = base64.b64encode(buffered.getvalue()).decode()
                 mime_type = "image/jpeg"
                 
